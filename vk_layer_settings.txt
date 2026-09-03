@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Arm Limited
+# SPDX-License-Identifier: MIT
+
+# VK_LAYER_LGL_neural_statistics settings
+# All artifact types are captured; there are no per-artifact enable toggles.
+
+# Exact capture root. A production writer will reject the capture if this path
+# already exists; it will not create an additional capture directory below it.
+# Remove this line to use the layer's generated timestamped default root.
+lgl_neural_statistics.capture_folder = ./neural_statistics
+
+# Exactly one statistics mode: 0 or 1.
+lgl_neural_statistics.statistics_mode = 0
+
+# Blank captures all executed dispatch occurrences in every session.
+# N captures occurrence N; N-M captures the inclusive range. Indices are
+# zero-based and reserved per session at execution, independent of command buffers.
+lgl_neural_statistics.dispatch_filter =

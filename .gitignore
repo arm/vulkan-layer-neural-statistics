@@ -1,0 +1,6 @@
+# build dirs
+build*/
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Arm Limited
+
+config_version = "0"
+
+exclude_patterns = [
+  "**/.git/**",
+  "**/build*/**",
+  "**/node_modules/**",
+  "**/vendor/**",
+  "**/generated/**",
+  "**/source_third_party/**",
+  "**/*.bin",
+  "**/*.spv",
+]
+
+test_patterns = [
+  "**/tests/**",
+  "**/*_tests.cpp",
+  "**/test_*.*",
+]
+
+[smells]
+mode = "comment"
+
+[[plugin]]
+name = "gitleaks"
+mode = "block"
+
+[[plugin]]
+name = "shellcheck"
+mode = "comment"
+
+[[plugin]]
+name = "actionlint"
+mode = "comment"
+
+[[plugin]]
+name = "zizmor"
+mode = "comment"
+
+[[source]]
+name = "default"
+default = true

@@ -1,0 +1,51 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_LGL_neural_statistics",
+    "type": "INSTANCE",
+    "library_path": "libVkLayerNeuralStatistics.so",
+    "api_version": "1.3.0",
+    "implementation_version": "1",
+    "description": "Structured capture layer for neural accelerator statistics",
+    "features": {
+      "settings": [
+        {
+          "key": "capture_folder",
+          "label": "Capture Folder",
+          "description": "Exact root folder for this capture. Existing roots are rejected. If the setting is absent at runtime, the layer generates a timestamped root.",
+          "type": "SAVE_FOLDER",
+          "env": "VK_LAYER_CAPTURE_FOLDER",
+          "default": "./neural_statistics"
+        },
+        {
+          "key": "statistics_mode",
+          "label": "Statistics Mode",
+          "description": "Select exactly one VkNeuralAcceleratorStatisticsModeARM for the capture.",
+          "type": "ENUM",
+          "env": "VK_LAYER_STATISTICS_MODE",
+          "default": "0",
+          "flags": [
+            {
+              "key": "0",
+              "label": "Mode 0",
+              "description": "Collect VK_NEURAL_ACCELERATOR_STATISTICS_MODE_STATISTICS0_ARM."
+            },
+            {
+              "key": "1",
+              "label": "Mode 1",
+              "description": "Collect VK_NEURAL_ACCELERATOR_STATISTICS_MODE_STATISTICS1_ARM."
+            }
+          ]
+        },
+        {
+          "key": "dispatch_filter",
+          "label": "Dispatch Filter",
+          "description": "Blank captures all executed dispatches. N selects one zero-based occurrence; N-M selects an inclusive zero-based range. Only surrounding whitespace is accepted.",
+          "type": "STRING",
+          "env": "VK_LAYER_DISPATCH_FILTER",
+          "default": ""
+        }
+      ]
+    }
+  }
+}

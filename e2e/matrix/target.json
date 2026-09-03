@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "description": "Standalone Vulkan data-graph neural-statistics target matrix. No external application or scenario files are required.",
+  "cases": [
+    {
+      "name": "mode0-capture-all",
+      "tags": ["real_target", "smoke", "mode0"],
+      "fixture": {"args": ["--graph-count", "1", "--events", "{RUN_DIR}/fixture-events.json", "--spirv-reference", "{RUN_DIR}/fixture-reference.spv"]},
+      "layer": {"statistics_mode": 0, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [{"event": "spirv_reference_written", "count": 1}],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["shader_module", "debug_database", "statistics_info", "dispatch_statistics"], "spirv_file": "{RUN_DIR}/fixture-reference.spv", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "multiple-logical-devices",
+      "tags": ["real_target", "smoke", "multiple_devices"],
+      "fixture": {"args": ["--graph-count", "1", "--device-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "second_logical_device_used", "count": 1}],
+      "expected_capture": {"capture_status": "complete", "device_count": 2, "artifact_classes": ["shader_module", "debug_database", "statistics_info", "dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "mode1-single-filter",
+      "tags": ["real_target", "smoke", "mode1"],
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["shader_module", "debug_database", "statistics_info", "dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "filter-miss-lazy-hierarchy",
+      "tags": ["real_target", "filter"],
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "7"},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "artifact_classes": [], "pipelines": []}
+    },
+    {
+      "name": "inclusive-range-three-destinations",
+      "tags": ["real_target", "filter", "multiple_dispatches"],
+      "fixture": {"args": ["--graph-count", "3"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0-2"},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}, {"id": 1, "sessions": [{"id": 1, "dispatches": [{"id": 1, "executed_index": 0}]}]}, {"id": 2, "sessions": [{"id": 2, "dispatches": [{"id": 2, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "multiple-pipelines-sessions",
+      "tags": ["real_target", "multiple_pipelines", "multiple_sessions"],
+      "fixture": {"args": ["--graph-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}, {"id": 1, "sessions": [{"id": 1, "dispatches": [{"id": 1, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "secondary-filter0",
+      "tags": ["real_target", "secondary"],
+      "fixture": {"args": ["--graph-count", "1", "--secondary-executions", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "secondary_wrapper_recorded", "count": 1, "where": {"result": 1}}],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "repeated-secondary-filter0",
+      "tags": ["real_target", "secondary", "repeated_secondary"],
+      "fixture": {"args": ["--graph-count", "1", "--secondary-executions", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "repeated-secondary-filter1",
+      "tags": ["real_target", "secondary", "repeated_secondary"],
+      "fixture": {"args": ["--graph-count", "1", "--secondary-executions", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "1"},
+      "expected_exit": 0,
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "same-secondary-twice-in-primary",
+      "tags": ["real_target", "secondary", "repeated_secondary"],
+      "fixture": {"args": ["--graph-count", "1", "--secondary-executions", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [{"event": "secondary_wrapper_recorded", "count": 1, "where": {"result": 2}}],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "same-primary-twice-in-one-submit",
+      "tags": ["real_target", "primary", "repeated_primary"],
+      "fixture": {"args": ["--graph-count", "1", "--primary-command-buffers-per-submit", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "primary_command_buffer_batch", "count": 1, "where": {"result": 2}},
+        {"event": "primary_command_buffer_batch_marshaled", "count": 1, "where": {"result": 2}}
+      ],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "collector-completion-retry",
+      "tags": ["real_target", "reuse", "timing"],
+      "fixture": {"args": ["--graph-count", "1", "--resubmissions", "2", "--reuse-retry-ms", "5", "--reuse-timeout-ms", "10000"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "reuse_transient_not_forwarded", "count": 0},
+        {"event": "reuse_retry_success", "count": 0},
+        {"event": "application_fence_complete", "count": 2}
+      ],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "immediate-primary-resubmission-no-retry",
+      "tags": ["real_target", "reuse", "regression"],
+      "fixture": {"args": ["--graph-count", "1", "--dispatch-repeats", "4", "--immediate-resubmission"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "immediate_resubmission_submit", "count": 4},
+        {"event": "application_fence_complete", "count": 4}
+      ],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}, {"id": 2, "executed_index": 2}, {"id": 3, "executed_index": 3}]}]}]}
+    },
+    {
+      "name": "distinct-one-time-primaries-same-session",
+      "tags": ["real_target", "reuse", "regression", "distinct_primary"],
+      "fixture": {"args": ["--graph-count", "1", "--distinct-primary-submissions", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "distinct_primary_recorded", "count": 2},
+        {"event": "distinct_primary_submit_return", "count": 2},
+        {"event": "application_fence_complete", "count": 2}
+      ],
+      "expected_capture": {"capture_status": "complete", "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "same-session-data-graph-stage-semaphore",
+      "tags": ["real_target", "reuse", "regression", "distinct_primary", "stage_scope", "submit_route", "expected_unavailable"],
+      "fixture": {"args": ["--graph-count", "1", "--distinct-primary-submissions", "2", "--distinct-primary-stage-semaphore", "--submit-route", "core", "--queue-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 255,
+      "expected_stderr_contains": "requested core submit route is unavailable: vkQueueSubmit2 was not exposed",
+      "expected_events": [{"event": "fixture_process_end", "count": 1, "where": {"result": 255}}],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": [], "pipelines": []}
+    },
+    {
+      "name": "same-session-data-graph-stage-semaphore-khr",
+      "tags": ["real_target", "reuse", "regression", "distinct_primary", "stage_scope", "statistics_observation", "conditional_rendering", "test_delay", "submit_route"],
+      "fixture": {"args": ["--graph-count", "1", "--distinct-primary-submissions", "2", "--distinct-primary-stage-semaphore", "--second-dispatch-conditional-false", "--submit-route", "khr", "--queue-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "", "test_post_graph_copy_count": 256},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "distinct_primary_recorded", "count": 2},
+        {"event": "conditional_false_dispatch_recorded", "count": 1, "where": {"submission": 1}},
+        {"event": "data_graph_stage_semaphore_signal", "count": 1, "where": {"submission": 0}},
+        {"event": "data_graph_stage_semaphore_wait", "count": 1, "where": {"submission": 1}},
+        {"event": "queue_selected", "count": 1, "where": {"result": 0}},
+        {"event": "queue_selected", "count": 1, "where": {"result": 1}},
+        {"event": "distinct_primary_submit_return", "count": 2},
+        {"event": "application_fence_complete", "count": 2}
+      ],
+      "expected_event_order": [
+        {"event": "data_graph_stage_semaphore_signal", "where": {"submission": 0}},
+        {"event": "distinct_primary_submit_return", "where": {"submission": 0}},
+        {"event": "data_graph_stage_semaphore_wait", "where": {"submission": 1}},
+        {"event": "distinct_primary_submit_return", "where": {"submission": 1}}
+      ],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "statistics_contents": [{"dispatch_id": 0, "content": "nonzero"}], "statistics_differ": [[0, 1]], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
+    },
+    {
+      "name": "multiple-queues",
+      "tags": ["real_target", "queues", "timing"],
+      "fixture": {"args": ["--graph-count", "3", "--queue-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+      "expected_exit": 0,
+      "expected_events": [{"event": "queue_selected", "count": 2, "where": {"result": 0}}, {"event": "queue_selected", "count": 1, "where": {"result": 1}}],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}, {"id": 1, "sessions": [{"id": 1, "dispatches": [{"id": 1, "executed_index": 0}]}]}, {"id": 2, "sessions": [{"id": 2, "dispatches": [{"id": 2, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "legacy-submit",
+      "tags": ["real_target", "submit_route"],
+      "fixture": {"args": ["--graph-count", "1", "--submit-route", "legacy"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "submit_route_legacy", "count": 1}],
+      "expected_capture": {"capture_status": "complete"}
+    },
+    {
+      "name": "core-submit2",
+      "tags": ["real_target", "submit_route", "expected_unavailable"],
+      "fixture": {"args": ["--graph-count", "1", "--submit-route", "core"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 255,
+      "expected_stderr_contains": "requested core submit route is unavailable: vkQueueSubmit2 was not exposed",
+      "expected_events": [{"event": "fixture_process_end", "count": 1, "where": {"result": 255}}],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": [], "pipelines": []}
+    },
+    {
+      "name": "khr-submit2",
+      "tags": ["real_target", "submit_route"],
+      "fixture": {"args": ["--graph-count", "1", "--submit-route", "khr"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "submit_route_khr", "count": 1}],
+      "expected_capture": {"capture_status": "complete"}
+    },
+    {
+      "name": "noncapturable-filter-miss",
+      "tags": ["real_target", "noncapturable"],
+      "fixture": {"args": ["--graph-count", "1", "--noncapturable"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "7"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "noncapturable_state_enabled", "count": 1}],
+      "expected_capture": {"capture_status": "complete", "pipelines": []}
+    },
+    {
+      "name": "noncapturable-selected",
+      "tags": ["real_target", "noncapturable"],
+      "fixture": {"args": ["--graph-count", "1", "--noncapturable"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 255,
+      "expected_events": [{"event": "noncapturable_state_enabled", "count": 1}],
+      "expected_capture": {"capture_status": "error", "error_contains": "application-provided pipeline statistics state", "pipelines": []}
+    },
+    {
+      "name": "pending-work-destruction",
+      "tags": ["real_target", "destruction", "timing"],
+      "fixture": {"args": ["--graph-count", "1", "--destroy-after-fence"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 0,
+      "expected_events": [{"event": "application_fence_complete", "count": 1}, {"event": "application_fence_prompt_complete", "count": 1}, {"event": "collector_output_pending_observed", "count": 1}, {"event": "destruction_begin", "count": 1}, {"event": "destruction_end", "count": 1}],
+      "expected_event_order": ["application_fence_prompt_complete", "collector_output_pending_observed", "destruction_begin", "destruction_end"],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "capacity-turnover-test-build",
+      "tags": ["real_target", "capacity", "test_capacity_2", "timing"],
+      "fixture": {"args": ["--graph-count", "3", "--capacity-submissions", "3"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0-2"},
+      "expected_exit": 0,
+      "timeout_seconds": 600,
+      "expected_events": [{"event": "capacity_submit_start", "count": 1, "where": {"submission": 0}}, {"event": "capacity_submit_return", "count": 1, "where": {"submission": 0}}, {"event": "capacity_submit_start", "count": 1, "where": {"submission": 1}}, {"event": "capacity_submit_return", "count": 1, "where": {"submission": 1}}, {"event": "capacity_submit_start", "count": 1, "where": {"submission": 2}}, {"event": "capacity_wait_observed", "count": 1}, {"event": "capacity_prior_application_fence_complete", "min_count": 1, "max_count": 1}, {"event": "capacity_submit_return", "count": 1, "where": {"submission": 2}}],
+      "expected_event_order": [{"event": "capacity_submit_start", "where": {"submission": 0}}, {"event": "capacity_submit_return", "where": {"submission": 0}}, {"event": "capacity_submit_start", "where": {"submission": 1}}, {"event": "capacity_submit_return", "where": {"submission": 1}}, {"event": "capacity_submit_start", "where": {"submission": 2}}, "capacity_wait_observed", "capacity_prior_application_fence_complete", {"event": "capacity_submit_return", "where": {"submission": 2}}],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}, {"id": 1, "sessions": [{"id": 1, "dispatches": [{"id": 1, "executed_index": 0}]}]}, {"id": 2, "sessions": [{"id": 2, "dispatches": [{"id": 2, "executed_index": 0}]}]}]}
+    },
+    {
+      "name": "capture-root-collision",
+      "tags": ["real_target", "collision"],
+      "precreate_capture_root": true,
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
+      "expected_exit": 255
+    },
+    {
+      "name": "invalid-filter-malformed",
+      "tags": ["real_target", "invalid_filter"],
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "1 - 2"},
+      "expected_exit": 255,
+      "expected_capture": {"absent": true}
+    },
+    {
+      "name": "invalid-filter-reversed",
+      "tags": ["real_target", "invalid_filter"],
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "9-2"},
+      "expected_exit": 255,
+      "expected_capture": {"absent": true}
+    },
+    {
+      "name": "invalid-filter-overflow",
+      "tags": ["real_target", "invalid_filter"],
+      "fixture": {"args": ["--graph-count", "1"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "18446744073709551616"},
+      "expected_exit": 255,
+      "expected_capture": {"absent": true}
+    }
+  ],
+  "host_coverage": [
+    {"requirement": "protected selected-only rejection", "test": "live_hook_tests protected selected submission"},
+    {"requirement": "cross-family selected-only rejection", "test": "live_hook_tests queue-family legality"},
+    {"requirement": "foreign pipeline selected-only rejection", "test": "live_hook_tests foreign processing engine"},
+    {"requirement": "requirements route unsupported selected-only rejection", "test": "live_hook_tests dedicated-requirements route"},
+    {"requirement": "writer terminal failures", "test": "capture_writer_tests fault injection"},
+    {"requirement": "collector terminal failures", "test": "live_hook_tests marker, fence, map and writer failure"},
+    {"requirement": "non-head-of-line progress", "test": "live_hook_tests out-of-order collector fences"}
+  ]
+}

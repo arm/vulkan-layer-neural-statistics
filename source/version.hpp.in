@@ -1,0 +1,18 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2026 Arm Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
+ * @file Placeholder templates that are populated by CMake during configure.
+ */
+
+#pragma once
+
+// clang-format off
+#define LGL_VER_MAJOR @PROJECT_VERSION_MAJOR@
+#define LGL_VER_MINOR @PROJECT_VERSION_MINOR@
+#define LGL_VER_PATCH @PROJECT_VERSION_PATCH@
+#define LGL_LAYER_NAME "@LGL_LAYER_NAME_STR@"
+#define LGL_LAYER_DESC "@LGL_LAYER_DESC_STR@"
+#define LGL_COMMIT_ID "@LGL_COMMIT_ID_STR@"
