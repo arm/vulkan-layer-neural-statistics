@@ -43,10 +43,18 @@ exists. The instance drains and publishes `complete` or `error` during
 capture; each receives a distinct capture-local ID recorded in capture,
 pipeline, and session metadata.
 
-If a logical device does not expose the neural-statistics extension and feature,
-the device remains usable without layer instrumentation and `capture.json`
+If a physical device does not enumerate the neural-statistics extension,
+the logical device remains usable without layer instrumentation and `capture.json`
 records an explicit per-device warning instead of silently presenting an empty
 capture as fully supported.
+
+When the extension is enumerated, the layer attempts to enable its feature even
+if `vkGetPhysicalDeviceFeatures2` reports it as false. Some GPU drivers implement
+the extension but do not report this feature correctly. The layer logs the
+attempt and patches only its copy of the application's device-create info.
+The GPU driver may reject the request; any error from `vkCreateDevice` is
+returned unchanged. Calls after capture becomes terminal still bypass this
+instrumentation.
 
 Shader modules receive independent monotonic IDs and deep-copy SPIR-V at
 successful creation. Pipelines and sessions receive their own independent

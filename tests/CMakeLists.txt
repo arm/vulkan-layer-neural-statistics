@@ -166,3 +166,4 @@ target_compile_definitions(live_hook_tests PRIVATE
 target_compile_features(live_hook_tests PRIVATE cxx_std_20)
 target_link_libraries(live_hook_tests PRIVATE Threads::Threads)
 add_test(NAME live_hook_tests COMMAND live_hook_tests)
+add_test(NAME neural_statistics_device_capability_tests COMMAND live_hook_tests --device-capabilities)

@@ -148,8 +148,10 @@ void enableDeviceVkArmDataGraphNeuralAcceleratorStatistics(Instance &instance,
     instance.driver.vkGetPhysicalDeviceFeatures2(physicalDevice, &availableFeatures);
     if (available.dataGraphNeuralAcceleratorStatistics != VK_TRUE)
     {
-        LAYER_LOG("Device feature not available: dataGraphNeuralAcceleratorStatistics");
-        return;
+        // Some GPU drivers implement an enumerated extension without reporting its feature.
+        // Attempt enablement and preserve any error returned by vkCreateDevice.
+        LAYER_LOG("Neural statistics feature not advertised; attempting enablement for the "
+                  "enumerated extension");
     }
 
     // We know we can const-cast here because createInfo is a safe-struct clone.

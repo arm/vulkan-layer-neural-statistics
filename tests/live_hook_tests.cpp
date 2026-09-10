@@ -1782,9 +1782,11 @@ void TestNeuralStatisticsDeviceCapabilityPatch()
         const auto* configured =
             vku::FindStructInPNextChain<VkPhysicalDeviceDataGraphNeuralAcceleratorStatisticsFeaturesARM>(
                 safeCreateInfo.pNext);
-        Check(driver.neuralStatisticsFeatureQueries == 1 && !HasDeviceExtension(safeCreateInfo, extension.c_str())
-                  && configured != nullptr && configured->dataGraphNeuralAcceleratorStatistics == VK_FALSE,
-              "advertised extension with unsupported feature is neither enabled nor forced");
+        Check(driver.neuralStatisticsFeatureQueries == 1 && HasDeviceExtension(safeCreateInfo, extension.c_str())
+                  && configured != nullptr && configured->dataGraphNeuralAcceleratorStatistics == VK_TRUE,
+              "enumerated statistics extension is enabled despite a falsely advertised feature bit");
+        Check(requested.dataGraphNeuralAcceleratorStatistics == VK_FALSE,
+              "feature workaround patches the safe copy without modifying the application's structure");
     }
 
     {
@@ -1820,6 +1822,24 @@ void TestNeuralStatisticsDeviceCapabilityPatch()
     }
 
     {
+        driver.neuralStatisticsFeatureSupported = false;
+        driver.neuralStatisticsFeatureQueries = 0;
+        const VkDeviceCreateInfo createInfo {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+        vku::safe_VkDeviceCreateInfo safeCreateInfo(&createInfo);
+        std::vector<std::string> supported {extension};
+        Device::createInfoPatches.back()(instance, PhysicalDeviceHandle(), safeCreateInfo, supported);
+
+        const auto* configured =
+            vku::FindStructInPNextChain<VkPhysicalDeviceDataGraphNeuralAcceleratorStatisticsFeaturesARM>(
+                safeCreateInfo.pNext);
+        Check(driver.neuralStatisticsFeatureQueries == 1 && HasDeviceExtension(safeCreateInfo, extension.c_str())
+                  && configured != nullptr && configured->dataGraphNeuralAcceleratorStatistics == VK_TRUE,
+              "feature workaround inserts an enabled structure when the application provides none");
+        Check(createInfo.pNext == nullptr && createInfo.enabledExtensionCount == 0,
+              "feature workaround leaves the application's original create info unchanged");
+    }
+
+    {
         driver.neuralStatisticsFeatureQueries = 0;
         VkPhysicalDeviceDataGraphNeuralAcceleratorStatisticsFeaturesARM requested {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_NEURAL_ACCELERATOR_STATISTICS_FEATURES_ARM,
@@ -1848,6 +1868,60 @@ void TestNeuralStatisticsDeviceCapabilityPatch()
         Check(driver.neuralStatisticsFeatureQueries == 0 && !HasDeviceExtension(safeCreateInfo, extension.c_str())
                   && configured != nullptr && configured->dataGraphNeuralAcceleratorStatistics == VK_FALSE,
               "unadvertised statistics extension is not queried, enabled, or forced");
+    }
+}
+
+void TestNeuralStatisticsDeviceCreation()
+{
+    namespace fs = std::filesystem;
+    for (const auto result : {VK_SUCCESS, VK_ERROR_FEATURE_NOT_PRESENT})
+    {
+        driver = {};
+        driver.neuralStatisticsFeatureSupported = false;
+        driver.deviceCreateResult = result;
+        const fs::path root =
+            fs::temp_directory_path() / ("neural-statistics-device-feature-" + UniqueTestSuffix());
+        expectedInstanceRoot = root;
+        const std::string rootText = root.string();
+        const char* rootValue = rootText.c_str();
+        VkApplicationInfo applicationInfo {};
+        std::array<VkLayerSettingEXT, 3> settings {};
+        VkLayerSettingsCreateInfoEXT settingsInfo {};
+        VkLayerInstanceLink instanceLink {};
+        VkLayerInstanceCreateInfo instanceLoaderInfo {};
+        auto instanceInfo = MakeInstanceCreateInfo(rootValue, applicationInfo, settings, settingsInfo,
+                                                   instanceLink, instanceLoaderInfo);
+        VkInstance instance = VK_NULL_HANDLE;
+        Check(layer_vkCreateInstance<user_tag>(&instanceInfo, nullptr, &instance) == VK_SUCCESS,
+              "feature-advertisement test creates the tracked instance");
+
+        VkLayerDeviceLink deviceLink {};
+        VkLayerDeviceCreateInfo deviceLoaderInfo {};
+        VkDeviceQueueCreateInfo queueInfo {};
+        float priority = 0.0f;
+        auto deviceInfo = MakeDeviceCreateInfo(deviceLink, deviceLoaderInfo, queueInfo, priority);
+        VkDevice device = VK_NULL_HANDLE;
+        Check(layer_vkCreateDevice<user_tag>(PhysicalDeviceHandle(), &deviceInfo, nullptr, &device) == result,
+              "driver result from attempted statistics enablement is returned unchanged");
+        Check(driver.deviceCreates == 1 && driver.neuralStatisticsExtensionEnabled
+                  && driver.neuralStatisticsFeatureEnabled,
+              "feature workaround attempts one downstream creation with the extension and feature enabled");
+        if (result == VK_SUCCESS)
+        {
+            Check(device == DeviceHandle() && Device::retrieve(device)->neuralStatisticsEnabled,
+                  "accepted enablement publishes a capturable logical device despite the false feature query");
+            Check(Instance::retrieve(instance)->captureMetadata.warnings.empty(),
+                  "accepted feature workaround does not report the device as noncapturable");
+            layer_vkDestroyDevice<user_tag>(device, nullptr);
+        }
+        else
+        {
+            Check(device == VK_NULL_HANDLE && Instance::retrieve(instance)->captureMetadata.devices.empty(),
+                  "rejected enablement does not fabricate or publish a logical device");
+        }
+        layer_vkDestroyInstance<user_tag>(instance, nullptr);
+        std::error_code error;
+        fs::remove_all(root, error);
     }
 }
 
@@ -1968,13 +2042,14 @@ void TestInstanceWriterAndMultipleDevices()
         float priority = 0.0f;
         auto deviceInfo = MakeDeviceCreateInfo(deviceLink, deviceLoaderInfo, queueInfo, priority);
 
+        driver.neuralStatisticsFeatureSupported = false;
         VkDevice firstDevice = VK_NULL_HANDLE;
         Check(layer_vkCreateDevice<user_tag>(PhysicalDeviceHandle(), &deviceInfo, nullptr, &firstDevice) == VK_SUCCESS
                   && firstDevice == DeviceHandle(),
               "first logical device is created and published");
         Check(driver.neuralStatisticsExtensionEnabled && driver.neuralStatisticsFeatureEnabled
                   && Device::retrieve(firstDevice)->neuralStatisticsEnabled,
-              "supported neural statistics capability is enabled and tracked on the device");
+              "falsely unadvertised statistics feature reaches device creation and is tracked as enabled");
 
         VkLayerDeviceLink secondDeviceLink{};
         VkLayerDeviceCreateInfo secondDeviceLoaderInfo{};
@@ -1982,7 +2057,7 @@ void TestInstanceWriterAndMultipleDevices()
         float secondPriority = 0.0f;
         auto secondDeviceInfo =
             MakeDeviceCreateInfo(secondDeviceLink, secondDeviceLoaderInfo, secondQueueInfo, secondPriority);
-        driver.neuralStatisticsFeatureSupported = false;
+        driver.exposeNeuralStatisticsExtension = false;
         VkDevice secondDevice = VK_NULL_HANDLE;
         Check(layer_vkCreateDevice<user_tag>(PhysicalDeviceHandle(), &secondDeviceInfo, nullptr, &secondDevice)
                       == VK_SUCCESS
@@ -1991,8 +2066,8 @@ void TestInstanceWriterAndMultipleDevices()
         Check(Device::retrieve(firstDevice)->captureDeviceId == capture::LogicalDeviceId(0)
                   && Device::retrieve(secondDevice)->captureDeviceId == capture::LogicalDeviceId(1),
               "logical devices receive distinct capture-local identities");
-        Check(driver.neuralStatisticsFeatureQueries == 2 && !Device::retrieve(secondDevice)->neuralStatisticsEnabled,
-              "unsupported neural statistics capability is retained independently per logical device");
+        Check(driver.neuralStatisticsFeatureQueries == 1 && !Device::retrieve(secondDevice)->neuralStatisticsEnabled,
+              "missing statistics extension remains noncapturable independently per logical device");
         Check(driver.requirements2ExtensionEnabled,
               "actual Vulkan-1.0 device capability enumeration enables KHR requirements2");
 
@@ -4748,6 +4823,19 @@ void TestSubmit2Routes()
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--device-capabilities") == 0)
+    {
+        TestNeuralStatisticsDeviceCapabilityPatch();
+        TestNeuralStatisticsDeviceCreation();
+        if (failures != 0)
+        {
+            std::cerr << failures << " device-capability test(s) failed\n";
+            return 1;
+        }
+        std::cout << "All device-capability tests passed\n";
+        return 0;
+    }
+
     if (argc == 3 && std::strcmp(argv[1], "--turnover-stress") == 0)
     {
         uint32_t repetitions = 0;
@@ -4780,6 +4868,7 @@ int main(int argc, char **argv)
 
     TestSafeMicromapUsageDeepCopy();
     TestNeuralStatisticsDeviceCapabilityPatch();
+    TestNeuralStatisticsDeviceCreation();
     TestInstanceWriterAndMultipleDevices();
     TestProtectedPipelinePassThrough();
     TestUnsupportedNeuralStatisticsPassThrough();
