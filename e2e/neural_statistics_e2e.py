@@ -989,14 +989,16 @@ def run_case(case: dict[str, Any], fixture: Path, work_root: Path, variables: di
         errors.append(f"exit code: expected {expected_exit}, got {exit_code}")
     if not cleanup_ok:
         errors.append(f"fixture process group {pid} leaked child processes")
-    expected_stderr = case.get("expected_stderr_contains", [])
-    if isinstance(expected_stderr, str):
-        expected_stderr = [expected_stderr]
-    if not isinstance(expected_stderr, list) or not all(isinstance(item, str) and item for item in expected_stderr):
-        raise E2EError(f"case {name}: expected_stderr_contains must be a nonempty string or an array of nonempty strings")
-    for expected in expected_stderr:
-        if expected not in stderr_text:
-            errors.append(f"stderr does not contain required diagnostic: {expected!r}")
+    for stream, text in (("stdout", stdout_text), ("stderr", stderr_text)):
+        key = f"expected_{stream}_contains"
+        diagnostics = case.get(key, [])
+        if isinstance(diagnostics, str):
+            diagnostics = [diagnostics]
+        if not isinstance(diagnostics, list) or not all(isinstance(item, str) and item for item in diagnostics):
+            raise E2EError(f"case {name}: {key} must be a nonempty string or an array of nonempty strings")
+        for expected in diagnostics:
+            if expected not in text:
+                errors.append(f"{stream} does not contain required diagnostic: {expected!r}")
     for pattern in BAD_LOG_PATTERNS:
         if pattern.search(combined):
             errors.append(f"unexpected fatal log pattern: {pattern.pattern}")

@@ -203,6 +203,7 @@ const std::vector<DeviceCreatePatchPtr> Device::createInfoPatches{
 /* See header for documentation. */
 void Device::store(VkDevice handle, std::unique_ptr<Device> device)
 {
+    capture::fault::Checkpoint(capture::fault::Point::DeviceBeforeStore);
     void *key = getDispatchKey(handle);
     g_devices.insert({key, std::move(device)});
 }

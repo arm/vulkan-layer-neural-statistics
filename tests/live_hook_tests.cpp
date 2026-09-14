@@ -6,6 +6,7 @@
 #include "capture_filesystem.hpp"
 #include "device.hpp"
 #include "fault_injection.hpp"
+#include "framework/manual_functions.hpp"
 #include "framework/utils.hpp"
 #include "instance.hpp"
 #include "layer_device_functions.hpp"
@@ -28,6 +29,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -128,6 +130,9 @@ struct DriverState
     VkResult instanceCreateResult{VK_SUCCESS};
     VkResult deviceCreateResult{VK_SUCCESS};
     uint32_t instanceCreates{0};
+    VkInstance* applicationInstanceOutput{nullptr};
+    uint32_t applicationInstanceCreates{0};
+    uint32_t auxiliaryInstanceCreates{0};
     uint32_t deviceCreates{0};
     uint32_t deviceExtensionQueries {0};
     uint32_t physicalDeviceFeatureQueries {0};
@@ -135,7 +140,7 @@ struct DriverState
     uint32_t queueFamilyPropertyQueries {0};
     uint32_t lastDeviceCreateEnabledExtensionCount {0};
     bool synchronization2FeatureEnabled {false};
-    bool writerRootObservedBeforeInstanceCreate{false};
+    bool writerRootObservedBeforeEveryInstanceCreate{true};
     bool lastInstanceCreateHadApplicationInfo {false};
     uint32_t lastInstanceCreateApiVersion {0};
     bool requirements2ExtensionEnabled{false};
@@ -145,6 +150,8 @@ struct DriverState
     bool neuralStatisticsExtensionEnabled {false};
     bool neuralStatisticsFeatureEnabled {false};
     uint32_t deviceDestroys{0};
+    bool probeDeviceDestroyLock{false};
+    bool deviceDestroyLockAvailable{false};
     uint32_t instanceDestroys{0};
 };
 
@@ -463,9 +470,19 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeCreateInstance(const VkInstanceCreateInfo* in
                                                   VkInstance *instance)
 {
     ++driver.instanceCreates;
+    // The application call uses its caller-owned output slot. Framework
+    // version probes use separate temporary slots; their number may vary.
+    if (instance == driver.applicationInstanceOutput)
+    {
+        ++driver.applicationInstanceCreates;
+    }
+    else
+    {
+        ++driver.auxiliaryInstanceCreates;
+    }
     driver.lastInstanceCreateHadApplicationInfo = info->pApplicationInfo != nullptr;
     driver.lastInstanceCreateApiVersion = info->pApplicationInfo == nullptr ? 0 : info->pApplicationInfo->apiVersion;
-    driver.writerRootObservedBeforeInstanceCreate =
+    driver.writerRootObservedBeforeEveryInstanceCreate &=
         !expectedInstanceRoot.empty() && std::filesystem::exists(expectedInstanceRoot);
     if (driver.instanceCreateResult == VK_SUCCESS)
     {
@@ -572,6 +589,17 @@ VKAPI_ATTR void VKAPI_CALL FakeDestroyInstance(VkInstance, const VkAllocationCal
 VKAPI_ATTR void VKAPI_CALL FakeDestroyDevice(VkDevice, const VkAllocationCallbacks *)
 {
     ++driver.deviceDestroys;
+    if (driver.probeDeviceDestroyLock)
+    {
+        std::thread probe([] {
+            if (g_vulkanLock.try_lock())
+            {
+                driver.deviceDestroyLockAvailable = true;
+                g_vulkanLock.unlock();
+            }
+        });
+        probe.join();
+    }
     driver.collectorJobsAtDeviceDestroy = Instance::retrieve(InstanceHandle())->collectorJobCount();
     std::lock_guard lock(fakeFenceMutex);
     driver.liveFencesAtDeviceDestroy = fakeFenceStatuses.size();
@@ -1695,59 +1723,86 @@ bool WaitForCollectorCount(Instance &instance, uint64_t count,
 
 void TestSafeMicromapUsageDeepCopy()
 {
-    VkMicromapUsageKHR direct[2] {
-        {3, 4, VK_OPACITY_MICROMAP_FORMAT_2_STATE_KHR},
-        {5, 6, VK_OPACITY_MICROMAP_FORMAT_4_STATE_KHR},
-    };
-    VkMicromapUsageKHR indirectValue {7, 8, VK_OPACITY_MICROMAP_FORMAT_2_STATE_KHR};
-    const VkMicromapUsageKHR* indirect[2] {&indirectValue, nullptr};
-    const VkAccelerationStructureGeometryMicromapDataKHR source {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR,
-        nullptr,
-        2,
-        direct,
-        indirect,
-        0x1000,
-        0x2000,
-        16,
-    };
+    // The direct and indirect arrays are mutually exclusive, and every indirect entry is valid.
+    for (const bool useIndirect : {false, true})
+    {
+        VkMicromapUsageKHR usage[2] {
+            {3, 4, VK_OPACITY_MICROMAP_FORMAT_2_STATE_KHR},
+            {5, 6, VK_OPACITY_MICROMAP_FORMAT_4_STATE_KHR},
+        };
+        const VkMicromapUsageKHR* indirect[2] {&usage[0], &usage[1]};
+        const VkAccelerationStructureGeometryMicromapDataKHR source {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR,
+            nullptr,
+            2,
+            useIndirect ? nullptr : usage,
+            useIndirect ? indirect : nullptr,
+            0x1000,
+            0x2000,
+            16,
+        };
 
-    vku::safe_VkAccelerationStructureGeometryMicromapDataKHR safe(&source);
-    Check(safe.pUsageCounts != source.pUsageCounts && safe.ppUsageCounts != source.ppUsageCounts
-              && safe.ppUsageCounts[0] != source.ppUsageCounts[0] && safe.ppUsageCounts[1] == nullptr
-              && safe.pUsageCounts[0].count == 3 && safe.ppUsageCounts[0]->count == 7,
-          "KHR micromap safe struct deep-copies both usage-count representations");
+        const auto ownsIndependentCopy = [useIndirect](const auto& owned, const auto& borrowed)
+        {
+            if (owned.usageCountsCount != 2 || borrowed.usageCountsCount != 2)
+            {
+                return false;
+            }
+            if (useIndirect)
+            {
+                return owned.pUsageCounts == nullptr && owned.ppUsageCounts != nullptr
+                    && borrowed.ppUsageCounts != nullptr && owned.ppUsageCounts != borrowed.ppUsageCounts
+                    && owned.ppUsageCounts[0] != nullptr && owned.ppUsageCounts[1] != nullptr
+                    && owned.ppUsageCounts[0] != borrowed.ppUsageCounts[0]
+                    && owned.ppUsageCounts[1] != borrowed.ppUsageCounts[1]
+                    && owned.ppUsageCounts[0]->count == 3 && owned.ppUsageCounts[1]->count == 5;
+            }
+            return owned.ppUsageCounts == nullptr && owned.pUsageCounts != nullptr
+                && owned.pUsageCounts != borrowed.pUsageCounts
+                && owned.pUsageCounts[0].count == 3 && owned.pUsageCounts[1].count == 5;
+        };
 
-    direct[0].count = 30;
-    indirectValue.count = 70;
-    Check(safe.pUsageCounts[0].count == 3 && safe.ppUsageCounts[0]->count == 7,
-          "KHR micromap safe struct does not alias source usage counts");
+        vku::safe_VkAccelerationStructureGeometryMicromapDataKHR safe(&source);
+        Check(ownsIndependentCopy(safe, source),
+              "KHR micromap safe struct deep-copies the selected valid usage-count representation");
 
-    vku::safe_VkAccelerationStructureGeometryMicromapDataKHR copied(safe);
-    vku::safe_VkAccelerationStructureGeometryMicromapDataKHR assigned;
-    assigned = safe;
-    Check(copied.pUsageCounts != safe.pUsageCounts && copied.ppUsageCounts != safe.ppUsageCounts
-              && copied.ppUsageCounts[0] != safe.ppUsageCounts[0] && assigned.pUsageCounts != safe.pUsageCounts
-              && assigned.ppUsageCounts != safe.ppUsageCounts && assigned.ppUsageCounts[0] != safe.ppUsageCounts[0]
-              && copied.ppUsageCounts[1] == nullptr && assigned.ppUsageCounts[1] == nullptr,
-          "KHR micromap safe struct copy and assignment own independent indirect elements");
+        usage[0].count = 30;
+        usage[1].count = 50;
+        Check(ownsIndependentCopy(safe, source),
+              "KHR micromap safe struct does not alias source usage counts");
 
-    const VkMicromapUsageKHR replacement {9, 10, VK_OPACITY_MICROMAP_FORMAT_4_STATE_KHR};
-    const VkAccelerationStructureGeometryMicromapDataKHR replacementSource {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR,
-        nullptr,
-        1,
-        &replacement,
-        nullptr,
-        0x3000,
-        0x4000,
-        32,
-    };
-    assigned.initialize(&replacementSource);
-    Check(assigned.usageCountsCount == 1 && assigned.pUsageCounts != &replacement && assigned.pUsageCounts[0].count == 9
-              && assigned.ppUsageCounts == nullptr && assigned.data == 0x3000 && assigned.triangleArray == 0x4000
-              && assigned.triangleArrayStride == 32,
-          "KHR micromap safe struct reinitialization releases and replaces both count representations");
+        vku::safe_VkAccelerationStructureGeometryMicromapDataKHR copied(safe);
+        vku::safe_VkAccelerationStructureGeometryMicromapDataKHR assigned;
+        assigned = safe;
+        Check(ownsIndependentCopy(copied, safe) && ownsIndependentCopy(assigned, safe)
+                  && ownsIndependentCopy(assigned, copied),
+              "KHR micromap safe struct copy and assignment own independent usage counts");
+
+        const VkMicromapUsageKHR replacement {9, 10, VK_OPACITY_MICROMAP_FORMAT_4_STATE_KHR};
+        const VkMicromapUsageKHR* replacementIndirect[1] {&replacement};
+        const VkAccelerationStructureGeometryMicromapDataKHR replacementSource {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR,
+            nullptr,
+            1,
+            useIndirect ? &replacement : nullptr,
+            useIndirect ? nullptr : replacementIndirect,
+            0x3000,
+            0x4000,
+            32,
+        };
+        assigned.initialize(&replacementSource);
+        const bool replacementCopied = useIndirect
+            ? assigned.ppUsageCounts == nullptr && assigned.pUsageCounts != nullptr
+                  && assigned.pUsageCounts != &replacement && assigned.pUsageCounts[0].count == 9
+            : assigned.pUsageCounts == nullptr && assigned.ppUsageCounts != nullptr
+                  && assigned.ppUsageCounts != replacementIndirect && assigned.ppUsageCounts[0] != nullptr
+                  && assigned.ppUsageCounts[0] != &replacement && assigned.ppUsageCounts[0]->count == 9;
+        Check(assigned.usageCountsCount == 1 && replacementCopied && assigned.data == 0x3000
+                  && assigned.triangleArray == 0x4000 && assigned.triangleArrayStride == 32,
+              "KHR micromap safe struct reinitialization switches usage-count representations");
+        Check(ownsIndependentCopy(safe, source) && ownsIndependentCopy(copied, safe),
+              "KHR micromap reinitialization does not change the other copies");
+    }
 }
 
 void TestNeuralStatisticsDeviceCapabilityPatch()
@@ -1925,6 +1980,55 @@ void TestNeuralStatisticsDeviceCreation()
     }
 }
 
+void TestInstanceCreateObservations()
+{
+    namespace fs = std::filesystem;
+    const fs::path root =
+        fs::temp_directory_path() / ("neural-statistics-instance-observations-" + UniqueTestSuffix());
+    expectedInstanceRoot = root;
+    VkInstanceCreateInfo info {};
+    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    VkInstance application = reinterpret_cast<VkInstance>(uintptr_t {0xBEEF});
+    std::error_code error;
+    fs::create_directories(root);
+
+    for (const uint32_t probeCount : {0u, 2u, 7u})
+    {
+        driver = {};
+        driver.instanceCreateResult = VK_ERROR_INCOMPATIBLE_DRIVER;
+        driver.applicationInstanceOutput = &application;
+        for (uint32_t i = 0; i < probeCount; ++i)
+        {
+            VkInstance temporary = VK_NULL_HANDLE;
+            FakeCreateInstance(&info, nullptr, &temporary);
+        }
+        FakeCreateInstance(&info, nullptr, &application);
+        Check(driver.instanceCreates == probeCount + 1 && driver.applicationInstanceCreates == 1
+                  && driver.auxiliaryInstanceCreates == probeCount,
+              "instance observations distinguish one application attempt from a variable number of probes");
+        Check(driver.writerRootObservedBeforeEveryInstanceCreate,
+              "instance observations accept a root present before every call");
+    }
+
+    driver = {};
+    driver.instanceCreateResult = VK_ERROR_INCOMPATIBLE_DRIVER;
+    driver.applicationInstanceOutput = &application;
+    fs::remove_all(root, error);
+    VkInstance temporary = VK_NULL_HANDLE;
+    FakeCreateInstance(&info, nullptr, &temporary);
+    fs::create_directories(root);
+    FakeCreateInstance(&info, nullptr, &application);
+    Check(!driver.writerRootObservedBeforeEveryInstanceCreate,
+          "a later root claim cannot hide an earlier downstream call before writer startup");
+    FakeCreateInstance(&info, nullptr, &application);
+    Check(driver.applicationInstanceCreates == 2 && driver.auxiliaryInstanceCreates == 1,
+          "a duplicate application creation cannot be counted as a version probe");
+
+    fs::remove_all(root, error);
+    expectedInstanceRoot.clear();
+    driver = {};
+}
+
 void TestInstanceWriterAndMultipleDevices()
 {
     namespace fs = std::filesystem;
@@ -1946,11 +2050,13 @@ void TestInstanceWriterAndMultipleDevices()
         auto createInfo = MakeInstanceCreateInfo(rootValue, applicationInfo, settings, settingsInfo, link, loaderInfo);
         Check(LayerOptions(&createInfo).getCaptureRoot() == root,
               "instance harness API settings resolve the requested capture root");
-        VkInstance output = reinterpret_cast<VkInstance>(uintptr_t {0xDEAD});
+        const VkInstance provisionalInstance = reinterpret_cast<VkInstance>(uintptr_t {0xDEAD});
+        VkInstance output = provisionalInstance;
         Check(layer_vkCreateInstance<user_tag>(&createInfo, nullptr, &output) == VK_ERROR_INITIALIZATION_FAILED
                   && driver.instanceCreates == 0,
               "writer startup/root-claim failure rejects before downstream vkCreateInstance");
-        Check(output == VK_NULL_HANDLE, "pre-forward instance failure deterministically clears the output handle");
+        Check(output == provisionalInstance,
+              "pre-forward instance failure preserves the loader's provisional output handle");
         fs::remove_all(root, error);
     }
 
@@ -1970,12 +2076,17 @@ void TestInstanceWriterAndMultipleDevices()
         VkLayerInstanceLink link{};
         VkLayerInstanceCreateInfo loaderInfo{};
         auto createInfo = MakeInstanceCreateInfo(rootValue, applicationInfo, settings, settingsInfo, link, loaderInfo);
-        VkInstance output = reinterpret_cast<VkInstance>(uintptr_t{0xBEEF});
+        const VkInstance provisionalInstance = reinterpret_cast<VkInstance>(uintptr_t {0xBEEF});
+        VkInstance output = provisionalInstance;
+        driver.applicationInstanceOutput = &output;
         Check(layer_vkCreateInstance<user_tag>(&createInfo, nullptr, &output) == VK_ERROR_INCOMPATIBLE_DRIVER,
               "downstream instance failure is preserved exactly");
-        Check(driver.instanceCreates == 1 && driver.writerRootObservedBeforeInstanceCreate,
-              "capture writer starts and claims its root before downstream instance creation");
-        Check(output == VK_NULL_HANDLE, "downstream instance failure leaves a deterministic null output handle");
+        Check(driver.applicationInstanceCreates == 1,
+              "downstream failure attempts application instance creation exactly once");
+        Check(driver.writerRootObservedBeforeEveryInstanceCreate,
+              "capture writer claims its root before every downstream instance creation, including probes");
+        Check(output == provisionalInstance,
+              "downstream instance failure preserves the loader's provisional output handle");
         std::ifstream captureFile(root / "capture.json");
         const auto document = nlohmann::json::parse(captureFile, nullptr, false);
         Check(document.is_object() && document.value("status", "") == "error",
@@ -1983,10 +2094,11 @@ void TestInstanceWriterAndMultipleDevices()
         fs::remove_all(root, error);
     }
 
+    for (const bool omitApplicationInfo : {true, false})
     {
         driver = {};
         const fs::path root =
-            fs::temp_directory_path() / ("neural-statistics-null-application-info-" + UniqueTestSuffix());
+            fs::temp_directory_path() / ("neural-statistics-default-application-info-" + UniqueTestSuffix());
         std::error_code error;
         fs::remove_all(root, error);
         expectedInstanceRoot = root;
@@ -1998,14 +2110,20 @@ void TestInstanceWriterAndMultipleDevices()
         VkLayerInstanceLink link {};
         VkLayerInstanceCreateInfo loaderInfo {};
         auto createInfo = MakeInstanceCreateInfo(rootValue, applicationInfo, settings, settingsInfo, link, loaderInfo);
-        createInfo.pApplicationInfo = nullptr;
+        applicationInfo.apiVersion = 0;
+        createInfo.pApplicationInfo = omitApplicationInfo ? nullptr : &applicationInfo;
+        Check(getApplicationAPIVersion(&createInfo) == APIVersion{1, 0},
+              "missing application info or a zero API version defaults to Vulkan 1.0");
 
         VkInstance instance = VK_NULL_HANDLE;
         Check(layer_vkCreateInstance<user_tag>(&createInfo, nullptr, &instance) == VK_SUCCESS
                   && instance == InstanceHandle(),
-              "instance creation accepts a valid null pApplicationInfo");
+              "instance creation accepts a missing application info or zero API version");
         Check(driver.lastInstanceCreateHadApplicationInfo && driver.lastInstanceCreateApiVersion == VK_API_VERSION_1_1,
-              "common create path synthesizes a valid promoted application info for the driver");
+              "common create path provides valid promoted application info to the driver");
+        Check(createInfo.pApplicationInfo == (omitApplicationInfo ? nullptr : &applicationInfo)
+                  && applicationInfo.apiVersion == 0,
+              "API version promotion leaves the application's create info unchanged");
 
         layer_vkDestroyInstance<user_tag>(instance, nullptr);
         fs::remove_all(root, error);
@@ -2086,8 +2204,18 @@ void TestInstanceWriterAndMultipleDevices()
         fs::remove_all(root, error);
     }
 
+    for (const auto [point, failure] : {
+             std::pair{capture::fault::Point::DeviceAfterDownstreamCreateBeforePublication,
+                       capture::fault::Failure::BadAllocation},
+             std::pair{capture::fault::Point::DeviceAfterDownstreamCreateBeforePublication,
+                       capture::fault::Failure::Unexpected},
+             std::pair{capture::fault::Point::DeviceBeforeStore, capture::fault::Failure::BadAllocation},
+             std::pair{capture::fault::Point::DeviceBeforeStore, capture::fault::Failure::Unexpected}})
     {
         driver = {};
+        driver.probeDeviceDestroyLock = true;
+        const VkResult expectedResult = failure == capture::fault::Failure::BadAllocation
+            ? VK_ERROR_OUT_OF_HOST_MEMORY : VK_ERROR_INITIALIZATION_FAILED;
         const fs::path root =
             fs::temp_directory_path() / ("neural-statistics-device-publication-fail-" + UniqueTestSuffix());
         std::error_code error;
@@ -2117,14 +2245,13 @@ void TestInstanceWriterAndMultipleDevices()
         auto deviceInfo = MakeDeviceCreateInfo(deviceLink, deviceLoaderInfo, queueInfo, priority);
         VkDevice device = reinterpret_cast<VkDevice>(uintptr_t {0xD00D});
         {
-            capture::fault::ScopedInjection injection(
-                capture::fault::Point::DeviceAfterDownstreamCreateBeforePublication,
-                capture::fault::Failure::BadAllocation);
+            capture::fault::ScopedInjection injection(point, failure);
             Check(layer_vkCreateDevice<user_tag>(PhysicalDeviceHandle(), &deviceInfo, nullptr, &device)
-                      == VK_ERROR_OUT_OF_HOST_MEMORY,
-                  "device state publication allocation failure is translated at the ABI boundary");
+                      == expectedResult,
+                  "device construction or publication failure is translated at the ABI boundary");
         }
         Check(device == VK_NULL_HANDLE && driver.deviceCreates == 1 && driver.deviceDestroys == 1
+                  && driver.deviceDestroyLockAvailable
                   && Instance::retrieve(instance)->captureMetadata.devices.empty()
                   && Instance::retrieve(instance)->isCaptureEnabled(),
               "failed device publication destroys the downstream device, clears output, and leaves capture coherent");
@@ -2427,11 +2554,12 @@ void TestTerminalCaptureObjectPassThrough()
     }
     Check(createResult == VK_SUCCESS && secondDevice == DeviceHandle1() && driver.deviceCreates == 2,
           "terminal capture forwards a later valid logical-device creation");
-    Check(driver.deviceExtensionQueries == extensionQueriesBefore
+    // The framework still enumerates extensions and queries the device API version.
+    Check(driver.deviceExtensionQueries == extensionQueriesBefore + 2
               && driver.physicalDeviceFeatureQueries == featureQueriesBefore
-              && driver.physicalDevicePropertyQueries == propertyQueriesBefore
+              && driver.physicalDevicePropertyQueries == propertyQueriesBefore + 1
               && driver.queueFamilyPropertyQueries == queueQueriesBefore,
-          "terminal logical-device creation performs no capture-only physical-device queries");
+          "terminal logical-device creation performs only framework-required capability queries");
     Check(driver.lastDeviceCreateEnabledExtensionCount == 0 && !driver.requirements2ExtensionEnabled
               && !driver.neuralStatisticsExtensionEnabled && !driver.neuralStatisticsFeatureEnabled
               && !driver.synchronization2FeatureEnabled && applicationSynchronization2.synchronization2 == VK_FALSE,
@@ -4674,11 +4802,12 @@ void TestWriterTerminalDeviceBypass()
         }
         Check(createResult == VK_SUCCESS && secondDevice == DeviceHandle1() && driver.deviceCreates == 2,
               "writer-terminal capture forwards a later valid logical-device creation");
-        Check(driver.deviceExtensionQueries == extensionQueriesBefore
+        // The framework still enumerates extensions and queries the device API version.
+        Check(driver.deviceExtensionQueries == extensionQueriesBefore + 2
                   && driver.physicalDeviceFeatureQueries == featureQueriesBefore
-                  && driver.physicalDevicePropertyQueries == propertyQueriesBefore
+                  && driver.physicalDevicePropertyQueries == propertyQueriesBefore + 1
                   && driver.queueFamilyPropertyQueries == queueQueriesBefore,
-              "writer-terminal device creation performs no capture-only physical-device queries");
+              "writer-terminal device creation performs only framework-required capability queries");
         Check(driver.lastDeviceCreateEnabledExtensionCount == 0 && !driver.requirements2ExtensionEnabled
                   && !driver.neuralStatisticsExtensionEnabled && !driver.neuralStatisticsFeatureEnabled
                   && !driver.synchronization2FeatureEnabled && applicationSynchronization2.synchronization2 == VK_FALSE,
@@ -4869,6 +4998,7 @@ int main(int argc, char **argv)
     TestSafeMicromapUsageDeepCopy();
     TestNeuralStatisticsDeviceCapabilityPatch();
     TestNeuralStatisticsDeviceCreation();
+    TestInstanceCreateObservations();
     TestInstanceWriterAndMultipleDevices();
     TestProtectedPipelinePassThrough();
     TestUnsupportedNeuralStatisticsPassThrough();

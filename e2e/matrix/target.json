@@ -138,13 +138,30 @@
     },
     {
       "name": "same-session-data-graph-stage-semaphore",
-      "tags": ["real_target", "reuse", "regression", "distinct_primary", "stage_scope", "submit_route", "expected_unavailable"],
-      "fixture": {"args": ["--graph-count", "1", "--distinct-primary-submissions", "2", "--distinct-primary-stage-semaphore", "--submit-route", "core", "--queue-count", "2"]},
-      "layer": {"statistics_mode": 1, "dispatch_filter": ""},
-      "expected_exit": 255,
-      "expected_stderr_contains": "requested core submit route is unavailable: vkQueueSubmit2 was not exposed",
-      "expected_events": [{"event": "fixture_process_end", "count": 1, "where": {"result": 255}}],
-      "expected_capture": {"capture_status": "complete", "artifact_classes": [], "pipelines": []}
+      "tags": ["real_target", "reuse", "regression", "distinct_primary", "stage_scope", "statistics_observation", "conditional_rendering", "test_delay", "submit_route"],
+      "fixture": {"args": ["--graph-count", "1", "--distinct-primary-submissions", "2", "--distinct-primary-stage-semaphore", "--second-dispatch-conditional-false", "--submit-route", "core", "--queue-count", "2"]},
+      "layer": {"statistics_mode": 1, "dispatch_filter": "", "test_post_graph_copy_count": 256},
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "distinct_primary_recorded", "count": 2},
+        {"event": "conditional_false_dispatch_recorded", "count": 1, "where": {"submission": 1}},
+        {"event": "data_graph_stage_semaphore_signal", "count": 1, "where": {"submission": 0}},
+        {"event": "data_graph_stage_semaphore_wait", "count": 1, "where": {"submission": 1}},
+        {"event": "queue_selected", "count": 1, "where": {"result": 0}},
+        {"event": "queue_selected", "count": 1, "where": {"result": 1}},
+        {"event": "submit_route_core", "count": 2},
+        {"event": "distinct_primary_submit_return", "count": 2, "where": {"result": 0}},
+        {"event": "application_fence_complete", "count": 2, "where": {"result": 0}}
+      ],
+      "expected_event_order": [
+        {"event": "data_graph_stage_semaphore_signal", "where": {"submission": 0}},
+        {"event": "distinct_primary_submit_return", "where": {"submission": 0}},
+        {"event": "data_graph_stage_semaphore_wait", "where": {"submission": 1}},
+        {"event": "distinct_primary_submit_return", "where": {"submission": 1}},
+        {"event": "application_fence_complete", "where": {"submission": 0}},
+        {"event": "application_fence_complete", "where": {"submission": 1}}
+      ],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "statistics_contents": [{"dispatch_id": 0, "content": "nonzero"}], "statistics_differ": [[0, 1]], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
     },
     {
       "name": "same-session-data-graph-stage-semaphore-khr",
@@ -159,14 +176,17 @@
         {"event": "data_graph_stage_semaphore_wait", "count": 1, "where": {"submission": 1}},
         {"event": "queue_selected", "count": 1, "where": {"result": 0}},
         {"event": "queue_selected", "count": 1, "where": {"result": 1}},
-        {"event": "distinct_primary_submit_return", "count": 2},
-        {"event": "application_fence_complete", "count": 2}
+        {"event": "submit_route_khr", "count": 2},
+        {"event": "distinct_primary_submit_return", "count": 2, "where": {"result": 0}},
+        {"event": "application_fence_complete", "count": 2, "where": {"result": 0}}
       ],
       "expected_event_order": [
         {"event": "data_graph_stage_semaphore_signal", "where": {"submission": 0}},
         {"event": "distinct_primary_submit_return", "where": {"submission": 0}},
         {"event": "data_graph_stage_semaphore_wait", "where": {"submission": 1}},
-        {"event": "distinct_primary_submit_return", "where": {"submission": 1}}
+        {"event": "distinct_primary_submit_return", "where": {"submission": 1}},
+        {"event": "application_fence_complete", "where": {"submission": 0}},
+        {"event": "application_fence_complete", "where": {"submission": 1}}
       ],
       "expected_capture": {"capture_status": "complete", "artifact_classes": ["dispatch_statistics"], "statistics_contents": [{"dispatch_id": 0, "content": "nonzero"}], "statistics_differ": [[0, 1]], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}]}]}]}
     },
@@ -190,13 +210,18 @@
     },
     {
       "name": "core-submit2",
-      "tags": ["real_target", "submit_route", "expected_unavailable"],
+      "tags": ["real_target", "submit_route"],
       "fixture": {"args": ["--graph-count", "1", "--submit-route", "core"]},
       "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
-      "expected_exit": 255,
-      "expected_stderr_contains": "requested core submit route is unavailable: vkQueueSubmit2 was not exposed",
-      "expected_events": [{"event": "fixture_process_end", "count": 1, "where": {"result": 255}}],
-      "expected_capture": {"capture_status": "complete", "artifact_classes": [], "pipelines": []}
+      "expected_exit": 0,
+      "expected_events": [
+        {"event": "submit_route_core", "count": 1},
+        {"event": "submit_end", "count": 1, "where": {"result": 0}},
+        {"event": "application_fence_complete", "count": 1, "where": {"result": 0}},
+        {"event": "fixture_process_end", "count": 1, "where": {"result": 0}}
+      ],
+      "expected_event_order": ["submit_route_core", "submit_end", "application_fence_complete", "fixture_process_end"],
+      "expected_capture": {"capture_status": "complete", "artifact_classes": ["shader_module", "debug_database", "statistics_info", "dispatch_statistics"], "statistics_contents": [{"dispatch_id": 0, "content": "nonzero"}], "pipelines": [{"id": 0, "sessions": [{"id": 0, "dispatches": [{"id": 0, "executed_index": 0}]}]}]}
     },
     {
       "name": "khr-submit2",
@@ -221,9 +246,17 @@
       "tags": ["real_target", "noncapturable"],
       "fixture": {"args": ["--graph-count", "1", "--noncapturable"]},
       "layer": {"statistics_mode": 1, "dispatch_filter": "0"},
-      "expected_exit": 255,
-      "expected_events": [{"event": "noncapturable_state_enabled", "count": 1}],
-      "expected_capture": {"capture_status": "error", "error_contains": "application-provided pipeline statistics state", "pipelines": []}
+      "expected_exit": 0,
+      "expected_stdout_contains": "selected capture cannot override application-provided pipeline statistics state",
+      "expected_events": [
+        {"event": "noncapturable_state_enabled", "count": 1},
+        {"event": "submit_route_legacy", "count": 1},
+        {"event": "submit_end", "count": 1, "where": {"result": 0}},
+        {"event": "application_fence_complete", "count": 1, "where": {"result": 0}},
+        {"event": "fixture_process_end", "count": 1, "where": {"result": 0}}
+      ],
+      "expected_event_order": ["noncapturable_state_enabled", "submit_end", "application_fence_complete", "fixture_process_end"],
+      "expected_capture": {"capture_status": "error", "error_contains": "selected capture cannot override application-provided pipeline statistics state", "artifact_classes": [], "pipelines": []}
     },
     {
       "name": "pending-work-destruction",

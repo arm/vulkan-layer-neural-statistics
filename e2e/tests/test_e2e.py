@@ -176,31 +176,115 @@ class MatrixTests(unittest.TestCase):
 
     def test_same_session_data_graph_stage_semaphore_uses_two_queues_without_intermediate_host_wait(self):
         matrix_path = Path(__file__).parents[1] / "matrix" / "target.json"
-        matrix = e2e.parse_matrix(matrix_path)
-        case = next(item for item in matrix["cases"] if item["name"] == "same-session-data-graph-stage-semaphore")
-        arguments = case["fixture"]["args"]
-        self.assertIn("--distinct-primary-stage-semaphore", arguments)
-        self.assertEqual("core", arguments[arguments.index("--submit-route") + 1])
-        self.assertEqual("2", arguments[arguments.index("--queue-count") + 1])
-        self.assertEqual("2", arguments[arguments.index("--distinct-primary-submissions") + 1])
-        self.assertEqual(255, case["expected_exit"])
-        self.assertIn("vkQueueSubmit2 was not exposed", case["expected_stderr_contains"])
+        cases = {case["name"]: case for case in e2e.parse_matrix(matrix_path)["cases"]}
+        for route, name in (("core", "same-session-data-graph-stage-semaphore"),
+                            ("khr", "same-session-data-graph-stage-semaphore-khr")):
+            with self.subTest(route=route):
+                case = cases[name]
+                arguments = case["fixture"]["args"]
+                self.assertIn("--distinct-primary-stage-semaphore", arguments)
+                self.assertEqual(route, arguments[arguments.index("--submit-route") + 1])
+                self.assertEqual("2", arguments[arguments.index("--queue-count") + 1])
+                self.assertEqual("2", arguments[arguments.index("--distinct-primary-submissions") + 1])
+                self.assertIn("--second-dispatch-conditional-false", arguments)
+                self.assertEqual(256, case["layer"]["test_post_graph_copy_count"])
+                self.assertEqual(0, case["expected_exit"])
+                self.assertEqual([{"dispatch_id": 0, "content": "nonzero"}],
+                                 case["expected_capture"]["statistics_contents"])
+                self.assertEqual([[0, 1]], case["expected_capture"]["statistics_differ"])
+                self.assertEqual(
+                    [{"id": 0, "executed_index": 0}, {"id": 1, "executed_index": 1}],
+                    case["expected_capture"]["pipelines"][0]["sessions"][0]["dispatches"],
+                )
+                events = [
+                    {"event": "conditional_false_dispatch_recorded", "submission": 1},
+                    {"event": "distinct_primary_recorded", "submission": 0},
+                    {"event": "distinct_primary_recorded", "submission": 1},
+                    {"event": "queue_selected", "result": 0},
+                    {"event": "data_graph_stage_semaphore_signal", "submission": 0},
+                    {"event": f"submit_route_{route}"},
+                    {"event": "distinct_primary_submit_return", "submission": 0, "result": 0},
+                    {"event": "queue_selected", "result": 1},
+                    {"event": "data_graph_stage_semaphore_wait", "submission": 1},
+                    {"event": f"submit_route_{route}"},
+                    {"event": "distinct_primary_submit_return", "submission": 1, "result": 0},
+                    {"event": "application_fence_complete", "submission": 0, "result": 0},
+                    {"event": "application_fence_complete", "submission": 1, "result": 0},
+                ]
+                errors, _ = e2e.validate_events(events, case["expected_events"], case["expected_event_order"])
+                self.assertEqual([], errors)
+                reordered = list(events)
+                reordered[4], reordered[8] = reordered[8], reordered[4]
+                errors, _ = e2e.validate_events(reordered, case["expected_events"], case["expected_event_order"])
+                self.assertTrue(errors)
+                host_wait = list(events)
+                host_wait.insert(7, host_wait.pop(11))
+                errors, _ = e2e.validate_events(host_wait, case["expected_events"], case["expected_event_order"])
+                self.assertTrue(errors)
+                wrong_route = [dict(event, event="submit_route_legacy")
+                               if event["event"].startswith("submit_route_") else event for event in events]
+                errors, _ = e2e.validate_events(wrong_route, case["expected_events"], case["expected_event_order"])
+                self.assertTrue(errors)
 
-        khr_case = next(item for item in matrix["cases"] if item["name"] == "same-session-data-graph-stage-semaphore-khr")
-        khr_arguments = khr_case["fixture"]["args"]
-        self.assertEqual("khr", khr_arguments[khr_arguments.index("--submit-route") + 1])
-        events = khr_case["expected_events"]
-        self.assertIn("--second-dispatch-conditional-false", khr_arguments)
-        self.assertEqual(256, khr_case["layer"]["test_post_graph_copy_count"])
-        self.assertIn({"event": "conditional_false_dispatch_recorded", "count": 1, "where": {"submission": 1}}, events)
-        self.assertIn({"event": "data_graph_stage_semaphore_signal", "count": 1, "where": {"submission": 0}}, events)
-        self.assertIn({"event": "data_graph_stage_semaphore_wait", "count": 1, "where": {"submission": 1}}, events)
-        self.assertEqual(
-            [{"dispatch_id": 0, "content": "nonzero"}],
-            khr_case["expected_capture"]["statistics_contents"],
-        )
-        self.assertEqual([[0, 1]], khr_case["expected_capture"]["statistics_differ"])
-        self.assertEqual(0, khr_case["expected_exit"])
+    def test_core_submit_requires_completion_and_nonempty_capture(self):
+        matrix_path = Path(__file__).parents[1] / "matrix" / "target.json"
+        case = next(case for case in e2e.parse_matrix(matrix_path)["cases"] if case["name"] == "core-submit2")
+        self.assertEqual(0, case["expected_exit"])
+        events = [
+            {"event": "submit_route_core"},
+            {"event": "submit_end", "result": 0},
+            {"event": "application_fence_complete", "result": 0},
+            {"event": "fixture_process_end", "result": 0},
+        ]
+        errors, _ = e2e.validate_events(events, case["expected_events"], case["expected_event_order"])
+        self.assertEqual([], errors)
+        for bad_events in (events[:2] + events[3:],
+                           [dict(events[0], event="submit_route_khr")] + events[1:],
+                           events[:1] + [dict(events[1], result=-1)] + events[2:]):
+            errors, _ = e2e.validate_events(bad_events, case["expected_events"], case["expected_event_order"])
+            self.assertTrue(errors)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "capture"
+            paths = write_capture(root)
+            result = e2e.validate_capture(root, case["expected_capture"], 1)
+            self.assertTrue(result["ok"], result["errors"])
+            paths["raw"].write_bytes(bytes(paths["raw"].stat().st_size))
+            self.assertFalse(e2e.validate_capture(root, case["expected_capture"], 1)["ok"])
+
+    def test_noncapturable_selection_requires_application_success_and_capture_error(self):
+        matrix_path = Path(__file__).parents[1] / "matrix" / "target.json"
+        case = next(case for case in e2e.parse_matrix(matrix_path)["cases"] if case["name"] == "noncapturable-selected")
+        self.assertEqual(0, case["expected_exit"])
+        events = [
+            {"event": "noncapturable_state_enabled"},
+            {"event": "submit_route_legacy"},
+            {"event": "submit_end", "result": 0},
+            {"event": "application_fence_complete", "result": 0},
+            {"event": "fixture_process_end", "result": 0},
+        ]
+        errors, _ = e2e.validate_events(events, case["expected_events"], case["expected_event_order"])
+        self.assertEqual([], errors)
+        for bad_events in (events[:-2] + events[-1:],
+                           events[:2] + [dict(events[2], result=-1)] + events[3:]):
+            errors, _ = e2e.validate_events(bad_events, case["expected_events"], case["expected_event_order"])
+            self.assertTrue(errors)
+        with tempfile.TemporaryDirectory() as directory:
+            populated = Path(directory) / "populated"
+            paths = write_capture(populated)
+            capture = read_json(paths["capture"])
+            reason = "selected capture cannot override application-provided pipeline statistics state"
+            capture.update(status="error", error=reason)
+            write_json(paths["capture"], capture)
+            self.assertFalse(e2e.validate_capture(populated, case["expected_capture"], 1)["ok"])
+            root = Path(directory) / "capture"
+            root.mkdir()
+            capture["pipelines"] = []
+            write_json(root / "capture.json", capture)
+            result = e2e.validate_capture(root, case["expected_capture"], 1)
+            self.assertTrue(result["ok"], result["errors"])
+            for status, error in (("complete", None), ("error", "unrelated error")):
+                write_json(root / "capture.json", dict(capture, status=status, error=error))
+                self.assertFalse(e2e.validate_capture(root, case["expected_capture"], 1)["ok"])
 
     def test_same_submit_duplicate_destination_cases_capture_each_occurrence(self):
         matrix_path = Path(__file__).parents[1] / "matrix" / "target.json"
@@ -784,21 +868,32 @@ class OrchestratorTests(unittest.TestCase):
             result = e2e.run_case(accepted, Path(sys.executable), root / "accepted", {}, 2)
             self.assertEqual("pass", result["result"])
 
-    def test_expected_stderr_diagnostic(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            case = {
-                "name": "diagnostic",
-                "fixture": {"args": ["-c", "echo fixture-diagnostic >&2; exit 7"]},
-                "expected_exit": 7,
-                "expected_stderr_contains": "fixture-diagnostic",
-                "layer": {"statistics_mode": 1, "dispatch_filter": ""},
-            }
-            result = e2e.run_case(case, Path("/bin/sh"), root / "accepted", {}, 2)
-            self.assertEqual("pass", result["result"])
-            case["expected_stderr_contains"] = "missing-diagnostic"
-            result = e2e.run_case(case, Path("/bin/sh"), root / "rejected", {}, 2)
-            self.assertEqual("fail", result["result"])
+    def test_expected_stream_diagnostics(self):
+        for stream, other in (("stdout", "stderr"), ("stderr", "stdout")):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                key = f"expected_{stream}_contains"
+                case = {
+                    "name": "diagnostic",
+                    "fixture": {"args": ["-c", f"import sys; print('fixture-diagnostic', file=sys.{stream}); sys.exit(7)"]},
+                    "expected_exit": 7,
+                    "layer": {"statistics_mode": 1, "dispatch_filter": ""},
+                }
+                for diagnostic in ("fixture-diagnostic", ["fixture-diagnostic"]):
+                    case[key] = diagnostic
+                    result = e2e.run_case(case, Path(sys.executable), root / "accepted", {}, 2)
+                    self.assertEqual("pass", result["result"])
+                case[key] = "missing-diagnostic"
+                result = e2e.run_case(case, Path(sys.executable), root / "missing", {}, 2)
+                self.assertEqual("fail", result["result"])
+                for invalid in (None, 42, [""]):
+                    case[key] = invalid
+                    with self.assertRaises(e2e.E2EError):
+                        e2e.run_case(case, Path(sys.executable), root / "invalid", {}, 2)
+                case.pop(key)
+                case[f"expected_{other}_contains"] = "fixture-diagnostic"
+                result = e2e.run_case(case, Path(sys.executable), root / "wrong-stream", {}, 2)
+                self.assertEqual("fail", result["result"])
 
     def test_timeout_kills_child_process_tree(self):
         with tempfile.TemporaryDirectory() as directory:

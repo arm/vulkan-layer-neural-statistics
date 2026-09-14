@@ -23,6 +23,7 @@ enum class Point
     MarkErrorBeforeCommit,
     InstanceAfterDownstreamCreateBeforePublication,
     DeviceAfterDownstreamCreateBeforePublication,
+    DeviceBeforeStore,
     ShaderRecordBeforeInsertion,
     ShaderMapInsertion,
     ShaderRecordAfterInsertionBeforeCommit,

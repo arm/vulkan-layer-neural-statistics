@@ -47,7 +47,7 @@ Never ship that capacity-override artifact.
 - `--dispatch-repeats N --immediate-resubmission` performs immediate completed-primary reuse without retry;
 - `--distinct-primary-submissions 2` records and submits two distinct one-time primaries using the same session;
 - `--distinct-primary-stage-semaphore --queue-count 2` links those submissions only at `VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM`;
-- `--second-dispatch-conditional-false` wraps the second distinct primary dispatch in a false conditional-rendering predicate, leaving its layer-cleared statistics allocation at zero;
+- `--second-dispatch-conditional-false` wraps the second distinct primary dispatch in a false conditional-rendering predicate, providing contrasting statistics for comparison with the first dispatch;
 - `--submit-route legacy|core|khr` selects `vkQueueSubmit`, `vkQueueSubmit2`, or `vkQueueSubmit2KHR`;
 - `--noncapturable` chains the pinned official `VkDataGraphPipelineNeuralStatisticsCreateInfoARM` with neural statistics allowed;
 - `--destroy-after-fence` destroys application graph objects after the application fence while collector output remains pending;
@@ -57,7 +57,11 @@ Never ship that capacity-override artifact.
 
 The fixture never sets layer settings. The orchestrator owns `VK_LAYER_CAPTURE_FOLDER`, `VK_LAYER_STATISTICS_MODE`, `VK_LAYER_DISPATCH_FILTER`, and layer activation variables. The same-session synchronization regression also owns the private test-only `VK_LAYER_TEST_POST_GRAPH_COPY_COUNT` environment hook. Values above one repeat the statistics-to-snapshot copy with transfer barriers before host visibility, widening the overwrite window without changing production behavior; the default is exactly one copy.
 
-Submit2 routes are entrypoint-exact. The core route requires a pointer returned for vkQueueSubmit2, and the KHR route requires one returned for vkQueueSubmit2KHR; the fixture does not alias one spelling to the other. A matrix case may therefore record an expected, explicit route-unavailable result on a target that exposes only one spelling, while a separate case exercises the available route.
+The fixture requires Vulkan 1.3 and synchronization2. Submit2 routes are entrypoint-exact: the core route requires `vkQueueSubmit2`; the KHR route additionally requires the enabled `VK_KHR_synchronization2` extension and `vkQueueSubmit2KHR`. The fixture does not alias one spelling to the other. Missing prerequisites or a missing required entrypoint fail the run rather than count as a successful capture test.
+
+The core-submit case requires a successful submission, fence completion, and the exact captured dispatch with nonzero statistics. Both cross-queue same-session cases require two successful submissions through their selected entrypoint, ordered semaphore signal/wait events, and distinct statistics for the normal and conditionally suppressed dispatches.
+
+`noncapturable-selected` exercises valid application-provided statistics configuration that the layer cannot instrument. It requires application submission and fence completion to succeed, while capture terminates with the specific configuration-conflict error and no pipeline/session/dispatch hierarchy. This is a capture error, not a warning or a forced application failure. The diagnostic is checked on stdout, where the Linux framework emits `LAYER_ERR`; matrix cases can require messages on either stream using `expected_stdout_contains` or `expected_stderr_contains`.
 
 ## Matrix and launch
 
