@@ -90,7 +90,9 @@ jobs:
           git clone --depth 1 https://github.com/ARM-software/libGPULayers.git libGPULayers
           rm -rf libGPULayers/layer_neural_statistics
           cp -a layer_neural_statistics libGPULayers/layer_neural_statistics
-          rm -rf libGPULayers/layer_neural_statistics/.git
+          source_commit="$(git --git-dir=layer_neural_statistics/.git rev-parse HEAD)"
+          assembled_commit="$(git --git-dir=libGPULayers/layer_neural_statistics/.git rev-parse HEAD)"
+          test "${source_commit}" = "${assembled_commit}"
 
       - name: Generate Vulkan sources
         working-directory: libGPULayers
@@ -114,9 +116,9 @@ jobs:
           test -f build_native/source/libVkLayerNeuralStatistics.so
           test -f build_package/x86_64/linux/lib/libVkLayerNeuralStatistics.so
 
-      - name: Test neural statistics device capabilities
+      - name: Test layer identity and device capabilities
         working-directory: libGPULayers/layer_neural_statistics
-        run: ctest --test-dir build_native --output-on-failure --no-tests=error -R '^neural_statistics_device_capability_tests$'
+        run: ctest --test-dir build_native --output-on-failure --no-tests=error -R '^(layer_commit_identity_tests|neural_statistics_device_capability_tests)$'
 
   build-packages:
     name: Build ${{ matrix.package_suffix }}
@@ -184,7 +186,9 @@ jobs:
           git clone --depth 1 https://github.com/ARM-software/libGPULayers.git libGPULayers
           rm -rf libGPULayers/layer_neural_statistics
           cp -a layer_neural_statistics libGPULayers/layer_neural_statistics
-          rm -rf libGPULayers/layer_neural_statistics/.git
+          source_commit="$(git --git-dir=layer_neural_statistics/.git rev-parse HEAD)"
+          assembled_commit="$(git --git-dir=libGPULayers/layer_neural_statistics/.git rev-parse HEAD)"
+          test "${source_commit}" = "${assembled_commit}"
 
       - name: Generate Vulkan sources
         working-directory: libGPULayers

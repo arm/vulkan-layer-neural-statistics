@@ -12,15 +12,8 @@ endif()
 # Set strings used by configure
 set(LGL_LAYER_NAME_STR "VK_LAYER_LGL_neural_statistics")
 set(LGL_LAYER_DESC_STR "VkLayerNeuralStatistics by LGL")
-execute_process(
-    COMMAND git rev-parse --short=12 HEAD
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-    OUTPUT_VARIABLE LGL_COMMIT_ID_STR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
-if (NOT LGL_COMMIT_ID_STR)
-    set(LGL_COMMIT_ID_STR "unknown")
-endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/commit_identity.cmake")
+neural_statistics_get_commit_identity("${CMAKE_CURRENT_SOURCE_DIR}/.." LGL_COMMIT_ID_STR)
 
 # Vulkan layer library
 configure_file(
